@@ -266,7 +266,7 @@ Fuente: [docs.m5stack.com/en/core/Cardputer-Adv](https://docs.m5stack.com/en/cor
 | `Bksp` | Borrar caracter |
 | `Enter` | Confirmar y conectar |
 | `` ` `` | Cancelar |
-| `Fn` | Alternar mostrar/ocultar password con asteriscos |
+| `Fn` | Alternar mostrar/ocultar password (visible por defecto) |
 
 ### En `ST_REPORT` (todas las pestanas)
 | Tecla | Accion |

@@ -10,7 +10,7 @@
 void ui_init();
 void ui_render_boot();
 void ui_render_scan(const struct WiFiAP* aps, uint8_t n, uint8_t selected, bool scanning);
-void ui_render_password(const char* ssid, const char* buf, uint8_t cursor, bool reveal = false);
+void ui_render_password(const char* ssid, const char* buf, uint8_t cursor, bool reveal = true);
 void ui_render_connecting(const char* ssid, uint8_t attempt);
 void ui_render_analyzing(uint8_t step, const char* step_name);
 void ui_render_report(const ConnProfile* p, ReportTab tab);

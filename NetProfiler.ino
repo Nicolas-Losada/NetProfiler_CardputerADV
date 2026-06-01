@@ -401,9 +401,8 @@ void loop() {
       break;
 
     case ST_PASSWORD: {
-      static bool reveal = false;
+      static bool reveal = true;  // visible por defecto (Fn alterna a ocultar)
       handle_input_password(in);
-      // Fn alterna revelar/ocultar
       if (in.key == K_HELP) reveal = !reveal;
       ui_render_password(g_aps[g_ap_selected].ssid, g_password, g_pwd_cursor, reveal);
       break;

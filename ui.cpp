@@ -184,7 +184,7 @@ void ui_render_password(const char* ssid, const char* buf, uint8_t cursor, bool 
   s_canvas.setCursor(2, 95);
   s_canvas.printf("Long: %d", cursor);
   s_canvas.setCursor(2, 110);
-  s_canvas.print("[Enter]OK [Bksp]Del [Fn]Ver");
+  s_canvas.print("[Enter]OK [Bksp]Del [Fn]Ocult");
   push();
 }
 
