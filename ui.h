@@ -10,7 +10,7 @@
 void ui_init();
 void ui_render_boot();
 void ui_render_scan(const struct WiFiAP* aps, uint8_t n, uint8_t selected, bool scanning);
-void ui_render_password(const char* ssid, const char* buf, uint8_t cursor);
+void ui_render_password(const char* ssid, const char* buf, uint8_t cursor, bool reveal = false);
 void ui_render_connecting(const char* ssid, uint8_t attempt);
 void ui_render_analyzing(uint8_t step, const char* step_name);
 void ui_render_report(const ConnProfile* p, ReportTab tab);
@@ -25,6 +25,7 @@ struct WiFiAP {
   uint8_t enc_idx;       // 0=open, 1=cifrado
   uint8_t auth_mode;     // wifi_auth_mode_t real
   bool hidden;
+  uint8_t ssid_count;    // cuantos APs comparten este SSID (mesh detection)
 };
 
 // Helpers entrada de teclado

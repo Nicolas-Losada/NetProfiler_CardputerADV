@@ -44,8 +44,9 @@ bool net_internet_fetch_ip_intel(ConnProfile* p) {
     return false;
   }
 
-  // Stream parsing con filtro para ahorrar RAM (sin PSRAM)
-  StaticJsonDocument<256> filter;
+  // ArduinoJson v7: JsonDocument (asignacion elastica acotada)
+  // Filtro mantiene RAM controlada (sin PSRAM)
+  JsonDocument filter;
   filter["query"] = true;
   filter["as"] = true;
   filter["asname"] = true;
@@ -58,7 +59,7 @@ bool net_internet_fetch_ip_intel(ConnProfile* p) {
   filter["regionName"] = true;
   filter["reverse"] = true;
 
-  StaticJsonDocument<1024> doc;
+  JsonDocument doc;
   DeserializationError err = deserializeJson(doc, http.getStream(),
                                              DeserializationOption::Filter(filter));
   http.end();
@@ -141,17 +142,61 @@ void net_internet_measure_rtt(ConnProfile* p) {
 }
 
 void net_internet_detect_cgnat(ConnProfile* p) {
-  // CGNAT-rango ya detectado en fetch_ip_intel
-  // Aqui podriamos hacer un traceroute para ver saltos en 100.64/10 entre
-  // gateway local e IP publica. Implementacion futura (lwIP raw).
-  // Por ahora, basta con el flag.
+  // CGNAT-rango ya detectado en fetch_ip_intel via IP publica
+}
+
+// ============================================================
+// Portal cautivo: pide generate_204 (Google) que SIEMPRE responde
+// HTTP 204 sin cuerpo. Cualquier otra respuesta = redireccion = portal
+// ============================================================
+static bool detect_captive_portal() {
+  WiFiClient client;
+  HTTPClient http;
+  http.setTimeout(3000);
+  if (!http.begin(client, "http://connectivitycheck.gstatic.com/generate_204")) {
+    return false;  // no concluyente, asumir no portal
+  }
+  // Sin redirects automaticos: queremos ver el codigo crudo
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  int code = http.GET();
+  http.end();
+  Serial.printf("[CAPTIVE] generate_204 -> HTTP %d\n", code);
+  // 204 = limpio; cualquier otra cosa (200, 302, etc) = portal o anomalia
+  return (code != 204 && code > 0);
+}
+
+// ============================================================
+// NAT64 detection (RFC 6052: prefijo well-known 64:ff9b::/96)
+// Limitacion: el core Arduino-ESP32 no expone facilmente las IPv6
+// globales del netif. Implementacion conservadora:
+// - Comprobar si hay direccion IPv6 link-local activa
+// - Marcar como no concluyente (no sumar al score) si no podemos verificar
+// el prefijo 64:ff9b::/96 directamente.
+// ============================================================
+static bool detect_nat64() {
+  // En core 3.x, comprobar si hay IPv6 link-local valida
+  IPAddress v6 = WiFi.linkLocalIPv6();
+  if ((uint32_t)v6 == 0) {
+    return false;  // sin IPv6 -> definitivamente sin NAT64
+  }
+  // Tenemos link-local pero no podemos inspeccionar globales facilmente
+  // sin meternos con lwIP raw. Por ahora retornamos false (no concluyente)
+  // para evitar falsos positivos. Documentado en README.
+  return false;
 }
 
 void net_internet_collect(ConnProfile* p) {
   if (!net_internet_check_reachability(p)) {
+    // Sin internet: marcamos sondas como no medidas
+    p->captive_portal = false;
+    p->nat64_detected = false;
     return;
   }
   net_internet_fetch_ip_intel(p);
   net_internet_measure_rtt(p);
   net_internet_detect_cgnat(p);
+
+  // Sondas: portal cautivo + NAT64
+  p->captive_portal = detect_captive_portal();
+  p->nat64_detected = detect_nat64();
 }

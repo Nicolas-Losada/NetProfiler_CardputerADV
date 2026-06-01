@@ -23,6 +23,7 @@
 #include "classifier.h"
 #include "storage.h"
 #include "net_clients.h"
+#include "audio.h"
 
 // === Estado global ===
 Config g_config;
@@ -63,8 +64,9 @@ static void net_task_fn(void* arg) {
       local.wifi_connected = WiFi.isConnected();
       local.last_update_ms = millis();
 
+      // 5 pasos (sin Hosts - movido a bajo demanda en TAB_CLIENTS)
       g_analyze_step = 1; g_analyze_step_name = "Enlace WiFi";
-      net_link_collect(&local);
+      net_link_collect(&local, g_aps[g_ap_selected]);
 
       g_analyze_step = 2; g_analyze_step_name = "DHCP/IP local";
       net_local_collect(&local);
@@ -75,13 +77,12 @@ static void net_task_fn(void* arg) {
       g_analyze_step = 4; g_analyze_step_name = "Clasificacion";
       classifier_run(&local);
 
-      g_analyze_step = 5; g_analyze_step_name = "Hosts LAN";
-      // ARP scan: descubrir dispositivos en subred
-      net_clients_scan(&g_clients, local.ip_local,
-                       local.subnet_mask, local.gateway);
+      // Limpiar clientes - se descubriran bajo demanda en TAB_CLIENTS
+      g_clients.count = 0;
+      g_clients.scan_time_ms = 0;
       g_clients_scroll = 0;
 
-      g_analyze_step = 6; g_analyze_step_name = "Guardando";
+      g_analyze_step = 5; g_analyze_step_name = "Guardando";
       if (g_config.log_to_sd) {
         storage_log_profile(&local);
       }
@@ -91,6 +92,9 @@ static void net_task_fn(void* arg) {
         memcpy(&g_profile, &local, sizeof(ConnProfile));
         xSemaphoreGive(g_profile_mutex);
       }
+
+      // Feedback audio segun veredicto
+      audio_beep_verdict(local.verdict);
 
       g_analyze_step = 0;
       g_state = ST_REPORT;
@@ -162,6 +166,16 @@ static void do_scan() {
   }
   WiFi.scanDelete();
   g_ap_selected = 0;
+
+  // Contar ssid_count para cada AP (cuantos BSSID comparten el mismo SSID)
+  for (uint8_t i = 0; i < g_ap_count; i++) {
+    g_aps[i].ssid_count = 0;
+    for (uint8_t j = 0; j < g_ap_count; j++) {
+      if (strcmp(g_aps[i].ssid, g_aps[j].ssid) == 0) {
+        g_aps[i].ssid_count++;
+      }
+    }
+  }
 }
 
 // =====================================================================
@@ -200,19 +214,20 @@ static bool connect_to(const WiFiAP& ap, const char* pwd) {
   WiFi.setSleep(false);  // sleep off durante analisis (mejor RTT)
 
   // Conexion dirigida: SSID + pwd + canal + BSSID + connect=true
-  // Esto fuerza al ESP32 a no escanear, va directo al AP correcto
-  const char* real_ssid = ap.hidden ? "" : ap.ssid;
+  // Funciona igual para visibles y ocultas - el SSID en ap.ssid es el real
+  // (oculta: usuario debe haber escrito SSID antes en una pantalla aparte;
+  // por ahora el placeholder "(oculta) MAC" no servira como SSID real)
   if (ap.hidden) {
-    // Si es oculta, no podemos pasar ssid vacio; recuperar SSID real falta
-    // Por ahora, intentamos sin BSSID
-    WiFi.begin(ap.ssid, pwd);
+    // SSID real desconocido. Intentar con BSSID/canal de todos modos
+    // (algunos routers permiten conexion por probe directo)
+    Serial.println("[CONN] SSID oculto - intento dirigido por BSSID");
+    WiFi.begin(ap.ssid, pwd, ap.channel, ap.bssid, true);
   } else {
     WiFi.begin(ap.ssid, pwd, ap.channel, ap.bssid, true);
   }
 
   uint32_t t0 = millis();
   wl_status_t last_st = WL_IDLE_STATUS;
-  uint8_t same_status_count = 0;
 
   while (millis() - t0 < 25000) {
     wl_status_t st = WiFi.status();
@@ -221,9 +236,6 @@ static bool connect_to(const WiFiAP& ap, const char* pwd) {
       Serial.printf("[CONN] Status: %s (%d ms)\n",
                     wifi_status_str(st), (int)(millis() - t0));
       last_st = st;
-      same_status_count = 0;
-    } else {
-      same_status_count++;
     }
 
     // Conectado: esperar IP valida (DHCP completo)
@@ -276,6 +288,9 @@ void setup() {
   } else {
     Serial.println("[SD] no detectada, sin logging");
   }
+
+  // Audio (opcional, si enable_audio en config.json)
+  audio_init();
 
   // Mutex profile
   g_profile_mutex = xSemaphoreCreateMutex();
@@ -385,10 +400,14 @@ void loop() {
       ui_render_scan(g_aps, g_ap_count, g_ap_selected, false);
       break;
 
-    case ST_PASSWORD:
+    case ST_PASSWORD: {
+      static bool reveal = false;
       handle_input_password(in);
-      ui_render_password(g_aps[g_ap_selected].ssid, g_password, g_pwd_cursor);
+      // Fn alterna revelar/ocultar
+      if (in.key == K_HELP) reveal = !reveal;
+      ui_render_password(g_aps[g_ap_selected].ssid, g_password, g_pwd_cursor, reveal);
       break;
+    }
 
     case ST_CONNECTING: {
       ui_render_connecting(g_aps[g_ap_selected].ssid, 1);
@@ -429,24 +448,47 @@ void loop() {
       // El cambio a ST_REPORT lo hace la net_task
       break;
 
-    case ST_REPORT:
+    case ST_REPORT: {
+      static ReportTab last_tab = (ReportTab)255;
+      static uint8_t last_scroll = 255;
+      static uint8_t last_client_count = 255;
+      static bool first_render = true;
+
+      ReportTab prev_tab = g_tab;
       handle_input_report(in);
+
+      bool dirty = first_render || (g_tab != last_tab);
+      first_render = false;
+
       if (g_tab == TAB_CLIENTS) {
-        // Scroll up/down en lista clientes
-        if (in.key == K_UP && g_clients_scroll > 0) g_clients_scroll--;
-        if (in.key == K_DOWN && g_clients_scroll + 7 < g_clients.count) g_clients_scroll++;
+        if (in.key == K_UP && g_clients_scroll > 0) { g_clients_scroll--; dirty = true; }
+        if (in.key == K_DOWN && g_clients_scroll + 7 < g_clients.count) {
+          g_clients_scroll++; dirty = true;
+        }
         if (in.key == K_CHAR && (in.ch == 'r' || in.ch == 'R')) {
           g_request_client_scan = true;
-          g_clients.count = 0; // forzar pantalla "Escaneando..."
+          g_clients.count = 0;
+          g_clients.scan_time_ms = 0;
+          dirty = true;
         }
-        ui_render_clients(&g_clients, g_clients_scroll);
+        // Cambios desde la tarea de red
+        if (g_clients_scroll != last_scroll || g_clients.count != last_client_count) {
+          dirty = true;
+          last_scroll = g_clients_scroll;
+          last_client_count = g_clients.count;
+        }
+        if (dirty) ui_render_clients(&g_clients, g_clients_scroll);
       } else {
-        if (g_profile_mutex && xSemaphoreTake(g_profile_mutex, pdMS_TO_TICKS(50))) {
-          ui_render_report(&g_profile, g_tab);
-          xSemaphoreGive(g_profile_mutex);
+        if (dirty) {
+          if (g_profile_mutex && xSemaphoreTake(g_profile_mutex, pdMS_TO_TICKS(50))) {
+            ui_render_report(&g_profile, g_tab);
+            xSemaphoreGive(g_profile_mutex);
+          }
         }
       }
+      last_tab = g_tab;
       break;
+    }
 
     case ST_ERROR:
       if (in.key == K_BACK) g_state = ST_SCAN;

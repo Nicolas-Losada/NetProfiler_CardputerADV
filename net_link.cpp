@@ -19,9 +19,10 @@ static void encryption_to_str(wifi_auth_mode_t auth, char* out, size_t n) {
   out[n - 1] = 0;
 }
 
-void net_link_collect(ConnProfile* p) {
+void net_link_collect(ConnProfile* p, const WiFiAP& connected_ap) {
   if (!p || !WiFi.isConnected()) return;
 
+  // SSID y BSSID actuales (los reportados por WiFi)
   String ssid = WiFi.SSID();
   strncpy(p->ssid, ssid.c_str(), sizeof(p->ssid) - 1);
   p->ssid[sizeof(p->ssid) - 1] = 0;
@@ -39,22 +40,11 @@ void net_link_collect(ConnProfile* p) {
   p->rssi = WiFi.RSSI();
   p->channel = WiFi.channel();
 
-  // Encryption: scan momentaneo del SSID conectado para obtener auth
-  // (core 3.x no expone WiFi.getEncryption() en cliente, se obtiene via scan)
-  int n = WiFi.scanNetworks(false, false, false, 250U);
-  uint8_t same_ssid = 0;
-  bool enc_set = false;
-  for (int i = 0; i < n; i++) {
-    if (WiFi.SSID(i) == ssid) {
-      same_ssid++;
-      if (!enc_set) {
-        encryption_to_str(WiFi.encryptionType(i), p->encryption, sizeof(p->encryption));
-        enc_set = true;
-      }
-    }
-  }
-  if (!enc_set) strncpy(p->encryption, "?", sizeof(p->encryption));
-  if (same_ssid == 0) same_ssid = 1;
-  p->bssid_count = same_ssid;
-  WiFi.scanDelete();
+  // Encryption: usar el auth_mode capturado en el scan PRE-conexion
+  // NO escanear estando conectado (rompe la asociacion en ESP32-S3)
+  encryption_to_str((wifi_auth_mode_t)connected_ap.auth_mode,
+                    p->encryption, sizeof(p->encryption));
+
+  // bssid_count: contado en do_scan(), no rescanear aqui
+  p->bssid_count = connected_ap.ssid_count > 0 ? connected_ap.ssid_count : 1;
 }
