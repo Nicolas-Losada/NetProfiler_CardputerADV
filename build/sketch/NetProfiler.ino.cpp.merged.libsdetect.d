@@ -336,6 +336,12 @@ NetProfiler.ino.cpp.o: \
  C:\Users\raven\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.8\libraries\WiFi\src/WiFiServer.h \
  C:\Users\raven\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.8\libraries\WiFi\src/WiFiUdp.h \
  C:\Users\raven\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.8\libraries\Network\src/NetworkUdp.h \
+ C:\Users\raven\AppData\Local\Arduino15\packages\esp32\tools\esp32s3-libs\3.3.8/include/esp_wifi/include/esp_wifi.h \
+ C:\Users\raven\AppData\Local\Arduino15\packages\esp32\tools\esp32s3-libs\3.3.8/include/esp_wifi/include/esp_wifi_crypto_types.h \
+ C:\Users\raven\AppData\Local\Arduino15\packages\esp32\tools\esp32s3-libs\3.3.8/include/esp_wifi/include/esp_wifi_default.h \
+ C:\Users\raven\AppData\Local\Arduino15\packages\esp32\tools\esp32s3-libs\3.3.8/include/esp_netif/include/esp_netif.h \
+ C:\Users\raven\AppData\Local\Arduino15\packages\esp32\tools\esp32s3-libs\3.3.8/include/esp_netif/include/esp_netif_types.h \
+ C:\Users\raven\AppData\Local\Arduino15\packages\esp32\tools\esp32s3-libs\3.3.8/include/esp_netif/include/esp_netif_defaults.h \
  C:\Users\raven\OneDrive\Documents\Firmwares\NetProfiler\build\sketch\conn_profile.h \
  C:\Users\raven\OneDrive\Documents\Firmwares\NetProfiler\build\sketch\config.h \
  C:\Users\raven\OneDrive\Documents\Firmwares\NetProfiler\build\sketch\ui.h \

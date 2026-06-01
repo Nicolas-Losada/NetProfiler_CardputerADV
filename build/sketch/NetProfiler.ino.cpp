@@ -14,6 +14,7 @@
 
 #include <M5Cardputer.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 #include "conn_profile.h"
 #include "config.h"
@@ -54,23 +55,25 @@ static const char* g_analyze_step_name = "";
 // =====================================================================
 // Tarea de red (core 0)
 // =====================================================================
-#line 55 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+#line 56 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
 static void net_task_fn(void* arg);
-#line 113 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+#line 114 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
 static void do_scan();
-#line 147 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
-static bool connect_to(const char* ssid, const char* pwd);
-#line 160 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+#line 174 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+static const char * wifi_status_str(wl_status_t st);
+#line 187 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+static bool connect_to(const WiFiAP& ap, const char* pwd);
+#line 260 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
 void setup();
-#line 196 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+#line 296 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
 static void handle_input_scan(const UIInput& in);
-#line 225 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+#line 325 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
 static void handle_input_password(const UIInput& in);
-#line 248 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+#line 348 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
 static void handle_input_report(const UIInput& in);
-#line 276 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+#line 376 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
 void loop();
-#line 55 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
+#line 56 "C:\\Users\\raven\\OneDrive\\Documents\\Firmwares\\NetProfiler\\NetProfiler.ino"
 static void net_task_fn(void* arg) {
   for (;;) {
     if (g_request_analyze) {
@@ -131,29 +134,51 @@ static void net_task_fn(void* arg) {
 // =====================================================================
 static void do_scan() {
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
+  WiFi.disconnect(true, true);  // borrar config + WiFi off momentaneo
+  delay(200);
+  WiFi.mode(WIFI_STA);
 
-  // show_hidden=true -> capta hotspots con SSID oculto (Xiaomi/Android).
-  // 500ms/canal -> mas tiempo para que hotspot movil responda al probe.
-  // Hotspots Android suelen estar en canal 1/6/11; algunos en 12/13.
-  // OJO: si el hotspot esta en 5GHz, el ESP32-S3 NO lo vera nunca (solo 2.4GHz).
-  int n = WiFi.scanNetworks(false, true, false, 500U);
+  // setCountry: habilita canales 12/13 (algunos routers latam los usan)
+  // WY = worldwide, permite mas canales sin restricciones de pais
+  wifi_country_t country = {
+    .cc = "01", .schan = 1, .nchan = 13,
+    .max_tx_power = 20, .policy = WIFI_COUNTRY_POLICY_MANUAL
+  };
+  esp_wifi_set_country(&country);
+
+  Serial.println("[SCAN] Iniciando scan amplio...");
+
+  // show_hidden=true -> capta hotspots con SSID oculto
+  // 600ms/canal -> mas tiempo para respuesta probe
+  int n = WiFi.scanNetworks(false, true, false, 600U);
+  Serial.printf("[SCAN] Redes encontradas: %d\n", n);
+
   g_ap_count = 0;
   for (int i = 0; i < n && g_ap_count < 20; i++) {
     String s = WiFi.SSID(i);
     WiFiAP& ap = g_aps[g_ap_count];
-    if (s.length() == 0) {
-      // Red oculta: mostrar con BSSID para poder seleccionarla igual
+
+    ap.hidden = (s.length() == 0);
+    if (ap.hidden) {
       snprintf(ap.ssid, sizeof(ap.ssid), "(oculta) %s",
                WiFi.BSSIDstr(i).c_str());
     } else {
       strncpy(ap.ssid, s.c_str(), sizeof(ap.ssid) - 1);
       ap.ssid[sizeof(ap.ssid) - 1] = 0;
     }
+
+    uint8_t* b = WiFi.BSSID(i);
+    if (b) memcpy(ap.bssid, b, 6);
+
     ap.rssi = WiFi.RSSI(i);
     ap.channel = WiFi.channel(i);
-    ap.enc_idx = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? 0 : 1;
+    ap.auth_mode = WiFi.encryptionType(i);
+    ap.enc_idx = (ap.auth_mode == WIFI_AUTH_OPEN) ? 0 : 1;
+
+    Serial.printf("  [%d] %s CH%d RSSI%d AUTH=%d %s\n",
+                  i, ap.ssid, ap.channel, ap.rssi, ap.auth_mode,
+                  WiFi.BSSIDstr(i).c_str());
+
     g_ap_count++;
   }
   WiFi.scanDelete();
@@ -161,15 +186,92 @@ static void do_scan() {
 }
 
 // =====================================================================
-// Conexion
+// Conexion robusta:
+// - Pasa BSSID + canal explicito (mas rapido en routers con multiples BSS)
+// - Maneja todos los status codes
+// - Espera DHCP completo (IP valida != 0.0.0.0)
+// - Timeout 25s (routers fijos pueden tardar mas que hotspots)
 // =====================================================================
-static bool connect_to(const char* ssid, const char* pwd) {
-  WiFi.begin(ssid, pwd);
-  uint32_t t0 = millis();
-  while (millis() - t0 < 15000) {
-    if (WiFi.status() == WL_CONNECTED) return true;
-    delay(200);
+static const char* wifi_status_str(wl_status_t st) {
+  switch (st) {
+    case WL_IDLE_STATUS:     return "IDLE";
+    case WL_NO_SSID_AVAIL:   return "SSID_NO_DISP";
+    case WL_SCAN_COMPLETED:  return "SCAN_OK";
+    case WL_CONNECTED:       return "CONNECTED";
+    case WL_CONNECT_FAILED:  return "FAIL_AUTH";
+    case WL_CONNECTION_LOST: return "PERDIDA";
+    case WL_DISCONNECTED:    return "DISC";
+    default:                 return "?";
   }
+}
+
+static bool connect_to(const WiFiAP& ap, const char* pwd) {
+  Serial.printf("[CONN] -> %s CH%d AUTH=%d hidden=%d\n",
+                ap.ssid, ap.channel, ap.auth_mode, ap.hidden);
+  Serial.printf("[CONN] BSSID %02X:%02X:%02X:%02X:%02X:%02X\n",
+                ap.bssid[0], ap.bssid[1], ap.bssid[2],
+                ap.bssid[3], ap.bssid[4], ap.bssid[5]);
+
+  // Limpiar estado WiFi anterior
+  WiFi.disconnect(true, true);
+  delay(300);
+  WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);  // sleep off durante analisis (mejor RTT)
+
+  // Conexion dirigida: SSID + pwd + canal + BSSID + connect=true
+  // Esto fuerza al ESP32 a no escanear, va directo al AP correcto
+  const char* real_ssid = ap.hidden ? "" : ap.ssid;
+  if (ap.hidden) {
+    // Si es oculta, no podemos pasar ssid vacio; recuperar SSID real falta
+    // Por ahora, intentamos sin BSSID
+    WiFi.begin(ap.ssid, pwd);
+  } else {
+    WiFi.begin(ap.ssid, pwd, ap.channel, ap.bssid, true);
+  }
+
+  uint32_t t0 = millis();
+  wl_status_t last_st = WL_IDLE_STATUS;
+  uint8_t same_status_count = 0;
+
+  while (millis() - t0 < 25000) {
+    wl_status_t st = WiFi.status();
+
+    if (st != last_st) {
+      Serial.printf("[CONN] Status: %s (%d ms)\n",
+                    wifi_status_str(st), (int)(millis() - t0));
+      last_st = st;
+      same_status_count = 0;
+    } else {
+      same_status_count++;
+    }
+
+    // Conectado: esperar IP valida (DHCP completo)
+    if (st == WL_CONNECTED) {
+      IPAddress ip = WiFi.localIP();
+      if (ip != IPAddress(0,0,0,0)) {
+        Serial.printf("[CONN] OK IP: %s\n", ip.toString().c_str());
+        delay(300); // estabilizar
+        return true;
+      }
+    }
+
+    // Fallo definitivo
+    if (st == WL_NO_SSID_AVAIL) {
+      Serial.println("[CONN] SSID no disponible");
+      return false;
+    }
+    if (st == WL_CONNECT_FAILED) {
+      Serial.println("[CONN] Auth fallo (contrasena?)");
+      return false;
+    }
+
+    delay(150);
+  }
+
+  Serial.println("[CONN] Timeout");
+  WiFi.disconnect(true);
   return false;
 }
 
@@ -294,7 +396,9 @@ static void handle_input_report(const UIInput& in) {
 // =====================================================================
 void loop() {
   M5Cardputer.update();
-  UIInput in = ui_poll_input();
+  // En PASSWORD usar raw mode para aceptar , . ; / como chars literales
+  bool raw = (g_state == ST_PASSWORD);
+  UIInput in = ui_poll_input(raw);
 
   switch (g_state) {
     case ST_SCAN:
@@ -309,13 +413,33 @@ void loop() {
 
     case ST_CONNECTING: {
       ui_render_connecting(g_aps[g_ap_selected].ssid, 1);
-      bool ok = connect_to(g_aps[g_ap_selected].ssid, g_password);
+      bool ok = connect_to(g_aps[g_ap_selected], g_password);
+      if (!ok) {
+        // Reintento: a veces el primer intento falla por canal incorrecto
+        Serial.println("[CONN] Reintento sin BSSID dirigido...");
+        ui_render_connecting(g_aps[g_ap_selected].ssid, 2);
+        WiFi.disconnect(true, true);
+        delay(500);
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(g_aps[g_ap_selected].ssid, g_password);
+        uint32_t t0 = millis();
+        while (millis() - t0 < 20000) {
+          if (WiFi.status() == WL_CONNECTED &&
+              WiFi.localIP() != IPAddress(0,0,0,0)) {
+            ok = true;
+            break;
+          }
+          if (WiFi.status() == WL_CONNECT_FAILED ||
+              WiFi.status() == WL_NO_SSID_AVAIL) break;
+          delay(200);
+        }
+      }
       if (ok) {
         g_request_analyze = true;
         g_state = ST_ANALYZING;
       } else {
         ui_render_error("Fallo conexion");
-        delay(2000);
+        delay(2500);
         g_state = ST_SCAN;
       }
       break;

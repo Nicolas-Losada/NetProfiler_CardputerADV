@@ -498,7 +498,7 @@ void ui_render_error(const char* msg) {
 // =====================================================================
 // Lectura teclado
 // =====================================================================
-UIInput ui_poll_input() {
+UIInput ui_poll_input(bool raw) {
   UIInput in;
   in.key = K_NONE;
   in.ch = 0;
@@ -520,12 +520,23 @@ UIInput ui_poll_input() {
   // Iterar palabras (chars)
   for (auto c : st.word) {
     s_last_key_ms = now;
+
+    // En modo raw (entrada texto/password) todos los chars son literales
+    // excepto el escape (`)
+    if (raw) {
+      if (c == '`') { in.key = K_BACK; return in; }
+      in.key = K_CHAR;
+      in.ch = c;
+      return in;
+    }
+
+    // Modo navegacion: , . ; / son flechas
     switch (c) {
-      case ',':  in.key = K_LEFT;  return in;   // < flecha
-      case '/':  in.key = K_RIGHT; return in;   // > flecha
+      case ',':  in.key = K_LEFT;  return in;
+      case '/':  in.key = K_RIGHT; return in;
       case ';':  in.key = K_UP;    return in;
       case '.':  in.key = K_DOWN;  return in;
-      case '`':  in.key = K_BACK;  return in;   // Esc -> Back
+      case '`':  in.key = K_BACK;  return in;
       default:
         in.key = K_CHAR;
         in.ch = c;

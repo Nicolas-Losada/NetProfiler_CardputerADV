@@ -19,9 +19,12 @@ void ui_render_error(const char* msg);
 
 struct WiFiAP {
   char ssid[33];
+  uint8_t bssid[6];      // para conexion dirigida
   int8_t rssi;
   uint8_t channel;
-  uint8_t enc_idx;
+  uint8_t enc_idx;       // 0=open, 1=cifrado
+  uint8_t auth_mode;     // wifi_auth_mode_t real
+  bool hidden;
 };
 
 // Helpers entrada de teclado
@@ -37,6 +40,7 @@ struct UIInput {
   char ch;  // si K_CHAR
 };
 
-UIInput ui_poll_input();
+// raw=true: no convertir , . ; / a teclas direccion (modo texto)
+UIInput ui_poll_input(bool raw = false);
 
 #endif
